@@ -36,6 +36,23 @@ Visit http://127.0.0.1:8000. API documentation: http://127.0.0.1:8000/docs.
 
 This prototype is **local-only and unauthenticated**. Do not deploy publicly until adding user authentication, persistence, concurrency controls, rate limiting, request origin/CSRF protection, and a security review.
 
+## Real-model experiment (not simulated)
+
+With a trusted local model running (for example Ollama), configure the two environment variables below in your local `.env`:
+
+```ini
+LLM_BASE_URL=http://127.0.0.1:11434/v1
+LLM_MODEL=qwen2.5:3b
+```
+
+Then run:
+
+```bash
+python evaluate_llm.py
+```
+
+The script tests 15 manually authored text cases, writes an ignored local `evaluation_results.csv`, and reports baseline model correctness, unsafe proposals accepted, and false holds. **Do not interpret these results as representative payment-industry error rates**; independent human-labeled multilingual and audio cases are a future milestone.
+
 ## Experimental limitations
 
 - Real LLM behavior has not been evaluated here. Set `LLM_BASE_URL` / `LLM_MODEL` only to a trusted operator-configured endpoint to try one.
@@ -53,6 +70,7 @@ This prototype is **local-only and unauthenticated**. Do not deploy publicly unt
 - `intentparity/main.py`: FastAPI routes and test lab
 - `static/index.html`: browser interface
 - `tests/`: authored safety and mocked PayPal tests
+- `evaluate_llm.py`: optional real-LLM labeled text evaluation
 - `.github/workflows/tests.yml`: automated PR checks
 
 MIT license.
