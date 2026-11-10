@@ -59,7 +59,7 @@ async def analyze(req: Analyze):
     case = {"case_id":cid, "status":verdict.status, "reason":verdict.reason,
             "amount":verdict.amount, "currency":verdict.currency,
             "proposed":model, "injected":injected, "approved":False,
-            "order_id":None, "capture":None}
+            "order_id":None, "approve_url":None, "capture":None}
     cases[cid] = case
     return {k:v for k,v in case.items() if k != "capture"}
 
@@ -87,13 +87,19 @@ async def checkout(req: CaseRef):
     if not case or case["status"] != "PASS" or case["injected"] or not case["approved"]:
         raise HTTPException(409, "Not independently verified and approved")
     if case["order_id"]:
-        return {"id":case["order_id"]}
+        return {"id":case["order_id"],"approve_url":case["approve_url"]}
     try:
         result = await create_order(case["amount"],case["currency"],case["case_id"])
     except SandboxError as exc:
         raise HTTPException(502, str(exc))
     case["order_id"] = result["id"]
-    return {"id": case["order_id"]}
+    approval_links = [item.get("href") for item in result.get("links", [])
+                      if item.get("rel") in ("approve", "payer-action")]
+    approval_link = approval_links[0] if approval_links else None
+    if approval_link and not approval_link.startswith(("https://www.sandbox.paypal.com/", "https://www.paypal.com/")):
+        approval_link = None
+    case["approve_url"] = approval_link
+    return {"id": case["order_id"], "approve_url": approval_link}
 
 @app.post("/api/capture/{case_id}")
 async def capture(case_id: str):
