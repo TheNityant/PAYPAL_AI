@@ -32,6 +32,8 @@ pre{background:#091328;padding:14px;border-radius:9px;white-space:pre-wrap;overf
 <p><label><input type="checkbox" id="confirmed" style="width:auto"/> I independently verified these values</label></p>
 <button id="approve" class="secondary" disabled>Approve verified intent</button>
 <button id="checkout" disabled>Create PayPal Sandbox order</button>
+<a id="buyerApproval" href="#" target="_blank" rel="noopener noreferrer" style="display:none;color:#b5caff">Approve with PayPal Sandbox buyer</a>
+<button id="capture" disabled>Verify completed sandbox capture</button>
 <p class="muted" id="checkoutInfo">Sandbox checkout is disabled by default; local credentials and explicit enablement required.</p>
 <pre id="transaction">No payment action taken.</pre></section>
 <section><h2>02 / Controlled Evaluation Lab</h2>
@@ -40,7 +42,7 @@ pre{background:#091328;padding:14px;border-radius:9px;white-space:pre-wrap;overf
 <pre id="labResult">No lab run yet.</pre></section>
 <section><h2>03 / Research Status</h2><p>This is an experimental prototype. Similar financial-language verification already exists. Real-model evaluation, live sandbox capture, and empirical differentiation remain to be demonstrated.</p></section>
 </main><script>
-let current=null;
+let current=null; let createdOrder=null;
 const el=id=>document.getElementById(id);
 async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',
 headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
@@ -50,7 +52,7 @@ async function showConfig(){try{const c=await api('/api/config');el('checkoutInf
 if(c.paypal_client_id && window.paypal===undefined && c.sandbox_checkout_enabled){
 const s=document.createElement('script');s.src='https://www.paypal.com/sdk/js?client-id='+encodeURIComponent(c.paypal_client_id)+'&currency=USD';document.head.appendChild(s);
 }}catch(e){}}
-el('analyze').onclick=async()=>{el('status').textContent='Checking…';current=null;el('approve').disabled=true;el('checkout').disabled=true;
+el('analyze').onclick=async()=>{el('status').textContent='Checking…';current=null;createdOrder=null;el('approve').disabled=true;el('checkout').disabled=true;el('capture').disabled=true;el('buyerApproval').style.display='none';
 try{const a=await api('/api/analyze',{instruction:el('instruction').value,
 injected_amount:el('override').value||null,injected_currency:el('overrideCurrency').value||null});
 current=a;el('analysis').textContent=JSON.stringify(a,null,2);el('status').textContent=a.status==='PASS'?'PASS — exact intent':'HOLD — review required';
@@ -63,8 +65,15 @@ el('transaction').textContent='Approved; no payment order created yet.';
 }catch(e){el('transaction').textContent=e.message}};
 el('checkout').onclick=async()=>{if(!current)return;try{
 const order=await api('/api/checkout',{case_id:current.case_id});
-el('transaction').textContent='Sandbox order created: '+order.id+'\nBuyer approval needed before capture. To complete approval, use PayPal sandbox order approval flow; do not attempt to capture an unapproved order.';
+createdOrder=order.id;
+el('transaction').textContent='Sandbox order: '+order.id+'\\nApprove with a PayPal sandbox personal buyer, then click Verify completed sandbox capture.';
+if(order.approve_url){el('buyerApproval').href=order.approve_url;el('buyerApproval').style.display='inline-block';el('capture').disabled=false}
+else{el('transaction').textContent+='\\nNo supported buyer-approval URL returned; check PayPal sandbox response.'}
 }catch(e){el('transaction').textContent=e.message}};
+el('capture').onclick=async()=>{if(!current||!createdOrder)return;
+try{const c=await api('/api/capture/'+encodeURIComponent(current.case_id),{});
+el('transaction').textContent=JSON.stringify(c,null,2)+(c.verified?'\\nVerified SANDBOX payment.':'\\nNot verified. Do not claim payment success.');
+}catch(e){el('transaction').textContent='Capture not completed: '+e.message}};
 el('lab').onclick=async()=>{try{const out=await api('/api/lab');
 el('labResult').textContent='Synthetic probes: '+out.count+'\n'+JSON.stringify(out.rows.slice(0,12),null,2)}
 catch(e){el('labResult').textContent=e.message}};
