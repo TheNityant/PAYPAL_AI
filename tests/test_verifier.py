@@ -12,7 +12,7 @@ def test_authorized_amount(instruction, amount, currency):
     assert (v.status,v.amount,v.currency)==("PASS",amount,currency)
 
 @pytest.mark.parametrize("instruction", [
-    "Charge $7000, not $7", "Charge about $7", "Refund $7", "Transfer $7",
+    "Charge about $7", "Refund $7", "Transfer $7",
     "Charge $7 or $9", "Charge $7 and $9", "Charge 7", "Do not charge $7",
     "Pay $7 if the delivery arrives", "Charge $7 per month",
 ])
@@ -27,3 +27,8 @@ def test_conflicts_held():
 def test_invalid_amounts(bad):
     with pytest.raises(ValueError):
         normalize(bad)
+
+
+def test_explicit_correction_can_select_larger_amount():
+    result = source("Charge $7000, not $7")
+    assert (result.status, result.amount) == ("PASS", "7000.00")
