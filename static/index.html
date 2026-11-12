@@ -33,7 +33,9 @@ pre{background:#091328;padding:14px;border-radius:9px;white-space:pre-wrap;overf
 <button id="approve" class="secondary" disabled>Approve verified intent</button>
 <button id="checkout" disabled>Create PayPal Sandbox order</button>
 <a id="buyerApproval" href="#" target="_blank" rel="noopener noreferrer" style="display:none;color:#b5caff">Approve with PayPal Sandbox buyer</a>
-<button id="capture" disabled>Verify completed sandbox capture</button>
+<button id="checkStatus" class="secondary" disabled>Check buyer approval</button>
+<button id="capture" disabled>Capture approved sandbox order</button>
+<p class="muted">Only USD test transactions are supported by this checkout demo. INR instructions may still be evaluated without sending a payment.</p>
 <p class="muted" id="checkoutInfo">Sandbox checkout is disabled by default; local credentials and explicit enablement required.</p>
 <pre id="transaction">No payment action taken.</pre></section>
 <section><h2>02 / Controlled Evaluation Lab</h2>
@@ -47,16 +49,33 @@ const el=id=>document.getElementById(id);
 async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',
 headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
 const data=await r.json();if(!r.ok)throw Error(data.detail||'Request failed');return data;}
-async function showConfig(){try{const c=await api('/api/config');el('checkoutInfo').textContent=c.sandbox_checkout_enabled?
-'Sandbox checkout enabled. Requires sandbox PayPal test buyer approval.':'Sandbox checkout disabled by default; add credentials and enable it locally.';
-if(c.paypal_client_id && window.paypal===undefined && c.sandbox_checkout_enabled){
-const s=document.createElement('script');s.src='https://www.paypal.com/sdk/js?client-id='+encodeURIComponent(c.paypal_client_id)+'&currency=USD';document.head.appendChild(s);
-}}catch(e){}}
-el('analyze').onclick=async()=>{el('status').textContent='Checking…';current=null;createdOrder=null;el('approve').disabled=true;el('checkout').disabled=true;el('capture').disabled=true;el('buyerApproval').style.display='none';
+async function showConfig(){
+try{
+const c=await api('/api/config');
+el('checkoutInfo').textContent=c.sandbox_checkout_enabled
+ ? 'PayPal Sandbox credentials configured. A real PayPal test buyer must approve the simulated-funds order.'
+ : 'Sandbox checkout disabled or credentials missing. Set PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET and ENABLE_SANDBOX_CHECKOUT=true in local .env.';
+}catch(e){el('checkoutInfo').textContent='Unable to read Sandbox configuration.';}
+}
+function resetVerification(){
+current=null;createdOrder=null;
+for(const id of ['approve','checkout','capture','checkStatus'])el(id).disabled=true;
+el('buyerApproval').style.display='none';
+el('confirmed').checked=false;
+el('status').textContent='Re-analyze after changing the source instruction.';
+}
+for(const id of ['instruction','override','overrideCurrency']){
+  el(id).addEventListener('input', resetVerification);
+}
+for(const id of ['amount','currency']){
+  el(id).addEventListener('input',()=>{el('checkout').disabled=true;});
+}
+el('confirmed').addEventListener('change',()=>{if(!el('confirmed').checked)el('checkout').disabled=true;});
+el('analyze').onclick=async()=>{el('status').textContent='Checking…';current=null;createdOrder=null;el('approve').disabled=true;el('checkout').disabled=true;el('capture').disabled=true;el('checkStatus').disabled=true;el('buyerApproval').style.display='none';
 try{const a=await api('/api/analyze',{instruction:el('instruction').value,
 injected_amount:el('override').value||null,injected_currency:el('overrideCurrency').value||null});
 current=a;el('analysis').textContent=JSON.stringify(a,null,2);el('status').textContent=a.status==='PASS'?'PASS — exact intent':'HOLD — review required';
-el('status').className=a.status==='PASS'?'good':'bad';el('approve').disabled=a.status!=='PASS'||a.injected;
+el('status').className=a.status==='PASS'?'good':'bad';el('approve').disabled=a.status!=='PASS'||a.injected||!a.checkout_eligible; if(a.status==='PASS'&&!a.checkout_eligible)el('status').textContent='VERIFIED — payment demo USD only';
 }catch(e){el('status').textContent=e.message}};
 el('approve').onclick=async()=>{if(!current)return;try{
 await api('/api/approve',{case_id:current.case_id,confirmed:el('confirmed').checked,
@@ -66,13 +85,24 @@ el('transaction').textContent='Approved; no payment order created yet.';
 el('checkout').onclick=async()=>{if(!current)return;try{
 const order=await api('/api/checkout',{case_id:current.case_id});
 createdOrder=order.id;
-el('transaction').textContent='Sandbox order: '+order.id+'\\nApprove with a PayPal sandbox personal buyer, then click Verify completed sandbox capture.';
-if(order.approve_url){el('buyerApproval').href=order.approve_url;el('buyerApproval').style.display='inline-block';el('capture').disabled=false}
+el('checkStatus').disabled=false;
+el('transaction').textContent='Sandbox order: '+order.id+'\\nApprove with a PayPal sandbox personal buyer, then click Check buyer approval.';
+if(order.approve_url){el('buyerApproval').href=order.approve_url;el('buyerApproval').style.display='inline-block'}
 else{el('transaction').textContent+='\\nNo supported buyer-approval URL returned; check PayPal sandbox response.'}
 }catch(e){el('transaction').textContent=e.message}};
+el('checkStatus').onclick=async()=>{
+if(!current||!createdOrder)return;
+try{
+const p=await api('/api/sandbox/status/'+encodeURIComponent(current.case_id));
+el('transaction').textContent='PayPal Sandbox order: '+p.order_id+'\\nStatus: '+p.paypal_status+
+'\\nBuyer approved: '+p.buyer_approved+'\\nCapture verified: '+p.captured+
+(p.receipt?'\\nReceipt: '+JSON.stringify(p.receipt,null,2):'');
+el('capture').disabled=!p.buyer_approved||p.captured;
+}catch(e){el('transaction').textContent='Could not verify buyer approval: '+e.message;}
+};
 el('capture').onclick=async()=>{if(!current||!createdOrder)return;
 try{const c=await api('/api/capture/'+encodeURIComponent(current.case_id),{});
-el('transaction').textContent=JSON.stringify(c,null,2)+(c.verified?'\\nVerified SANDBOX payment.':'\\nNot verified. Do not claim payment success.');
+el('transaction').textContent=JSON.stringify(c,null,2)+(c.verified?'\\nVerified SANDBOX payment.':'\\nNot verified. Do not claim payment success.'); if(c.verified){el('capture').disabled=true;}
 }catch(e){el('transaction').textContent='Capture not completed: '+e.message}};
 el('lab').onclick=async()=>{try{const out=await api('/api/lab');
 el('labResult').textContent='Synthetic probes: '+out.count+'\n'+JSON.stringify(out.rows.slice(0,12),null,2)}
