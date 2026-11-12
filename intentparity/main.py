@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from .verification import compare, normalize
-from .ai import interpret
+from .ai import interpret, is_configured
 from .paypal import create_order, capture_order, SandboxError
 
 load_dotenv()
@@ -42,7 +42,7 @@ def health():
 
 @app.get("/api/config")
 def config():
-    return {"ai_enabled": bool(os.getenv("LLM_BASE_URL") and os.getenv("LLM_MODEL")),
+    return {"ai_enabled": is_configured(),
             "sandbox_checkout_enabled": os.getenv("ENABLE_SANDBOX_CHECKOUT","").lower() == "true",
             "paypal_client_id": os.getenv("PAYPAL_CLIENT_ID","")}
 
