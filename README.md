@@ -36,6 +36,32 @@ Visit http://127.0.0.1:8000. API documentation: http://127.0.0.1:8000/docs.
 
 This prototype is **local-only and unauthenticated**. Do not deploy publicly until adding user authentication, persistence, concurrency controls, rate limiting, request origin/CSRF protection, and a security review.
 
+## Nebius cloud LLM (recommended)
+
+IntentParity supports Nebius Token Factory through its OpenAI-compatible chat endpoint.
+Set the following in a **local** `.env` (not in GitHub):
+
+```ini
+LLM_PROVIDER=nebius
+LLM_MODEL=YOUR_AVAILABLE_NEBIUS_MODEL_ID
+NEBIUS_API_KEY=YOUR_TOKEN_FACTORY_KEY
+```
+
+A custom `LLM_BASE_URL` is not required in Nebius mode; the adapter uses
+`https://api.tokenfactory.nebius.com/v1`. Select a model actually available to
+your account (see [Nebius models endpoint](https://api.tokenfactory.nebius.com/docs)).
+The Nebius API key is different from cloud infrastructure credentials.
+
+Run `python cloud_smoke_test.py` to check one **real** model response, then
+`python evaluate_llm.py` for an authored 15-case text-only evaluation.
+Neither command submits a payment or proves real-world model safety.
+
+**OpenCode versus Nebius:** OpenCode is primarily an AI coding agent; OpenCode Zen
+is a separate model gateway. For this application, Nebius is the simpler direct API.
+Other Chat Completions-compatible endpoints can use
+`LLM_PROVIDER=compatible`, `LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY`.
+An OpenCode Zen *Responses*-only model is **not** compatible without another adapter.
+
 ## Real-model experiment (not simulated)
 
 With a trusted local model running (for example Ollama), configure the two environment variables below in your local `.env`:
