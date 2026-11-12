@@ -1,13 +1,14 @@
 """PayPal Sandbox-only Orders v2. No production API endpoint."""
 import base64
 import os
+import re
 import httpx
 
 BASE = "https://api-m.sandbox.paypal.com"
 class SandboxError(Exception):
     pass
 
-async def _request(path, payload, request_id):
+async def _request(path, payload=None, request_id=None, method="POST"):
     user = os.getenv("PAYPAL_CLIENT_ID")
     secret = os.getenv("PAYPAL_CLIENT_SECRET")
     if not user or not secret:
@@ -20,9 +21,13 @@ async def _request(path, payload, request_id):
         if token_response.status_code >= 400:
             raise SandboxError("PayPal sandbox authentication failed")
         token = token_response.json()["access_token"]
-        response = await client.post(BASE + path, json=payload, headers={
-            "Authorization": "Bearer " + token, "Content-Type": "application/json",
-            "PayPal-Request-Id": request_id})
+        headers = {"Authorization": "Bearer " + token}
+        if method == "GET":
+            response = await client.get(BASE + path, headers=headers)
+        else:
+            headers["Content-Type"] = "application/json"
+            headers["PayPal-Request-Id"] = request_id
+            response = await client.post(BASE + path, json=payload, headers=headers)
         if response.status_code >= 400:
             raise SandboxError("PayPal Sandbox API returned HTTP " + str(response.status_code))
         return response.json()
@@ -36,3 +41,9 @@ async def create_order(amount, currency, case_id):
 async def capture_order(order_id, case_id):
     return await _request("/v2/checkout/orders/" + order_id + "/capture",
                           {}, "capture-" + case_id)
+
+async def get_order(order_id):
+    """Get order details directly from PayPal Sandbox before attempting capture."""
+    if not re.fullmatch(r"[A-Za-z0-9-]{5,64}", order_id):
+        raise SandboxError("Malformed sandbox order ID")
+    return await _request("/v2/checkout/orders/" + order_id, method="GET")

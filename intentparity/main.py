@@ -4,13 +4,14 @@ import io
 import os
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from .verification import compare, normalize
-from .ai import interpret
-from .paypal import create_order, capture_order, SandboxError
+from .ai import interpret, is_configured
+from .paypal import create_order, get_order, capture_order, SandboxError
 
 load_dotenv()
 app = FastAPI(title="IntentParity", version="0.2.0")
@@ -42,7 +43,7 @@ def health():
 
 @app.get("/api/config")
 def config():
-    return {"ai_enabled": bool(os.getenv("LLM_BASE_URL") and os.getenv("LLM_MODEL")),
+    return {"ai_enabled": is_configured(),
             "sandbox_checkout_enabled": os.getenv("ENABLE_SANDBOX_CHECKOUT","").lower() == "true",
             "paypal_client_id": os.getenv("PAYPAL_CLIENT_ID","")}
 
@@ -60,6 +61,7 @@ async def analyze(req: Analyze):
             "amount":verdict.amount, "currency":verdict.currency,
             "proposed":model, "injected":injected, "approved":False,
             "order_id":None, "approve_url":None, "capture":None}
+    case["checkout_eligible"] = verdict.status == "PASS" and verdict.currency == "USD" and not injected
     cases[cid] = case
     return {k:v for k,v in case.items() if k != "capture"}
 
@@ -86,8 +88,10 @@ async def checkout(req: CaseRef):
     case = cases.get(req.case_id)
     if not case or case["status"] != "PASS" or case["injected"] or not case["approved"]:
         raise HTTPException(409, "Not independently verified and approved")
+    if case["currency"] != "USD":
+        raise HTTPException(422, "This demo only processes USD sandbox orders; INR is evaluation-only.")
     if case["order_id"]:
-        return {"id":case["order_id"],"approve_url":case["approve_url"]}
+        return {"id":case["order_id"],"approve_url":case["approve_url"],"environment":"sandbox"}
     try:
         result = await create_order(case["amount"],case["currency"],case["case_id"])
     except SandboxError as exc:
@@ -96,10 +100,58 @@ async def checkout(req: CaseRef):
     approval_links = [item.get("href") for item in result.get("links", [])
                       if item.get("rel") in ("approve", "payer-action")]
     approval_link = approval_links[0] if approval_links else None
-    if approval_link and not approval_link.startswith(("https://www.sandbox.paypal.com/", "https://www.paypal.com/")):
-        approval_link = None
+    if approval_link:
+        parsed = urlparse(approval_link)
+        if parsed.scheme != "https" or parsed.hostname not in ("www.sandbox.paypal.com", "sandbox.paypal.com"):
+            approval_link = None
     case["approve_url"] = approval_link
-    return {"id": case["order_id"], "approve_url": approval_link}
+    return {"id": case["order_id"], "approve_url": approval_link, "environment":"sandbox"}
+
+def _verified_capture(order, case):
+    """Validate an order and its single COMPLETED capture against approved intent."""
+    units = order.get("purchase_units") or []
+    record = {}
+    valid = False
+    if len(units) == 1:
+        unit = units[0]
+        records = (unit.get("payments") or {}).get("captures") or []
+        if len(records) == 1:
+            record = records[0]
+            paid = record.get("amount") or {}
+            try:
+                amount_matches = normalize(paid.get("value")) == case["amount"]
+            except ValueError:
+                amount_matches = False
+            valid = (
+                order.get("id") == case["order_id"]
+                and order.get("status") == "COMPLETED"
+                and unit.get("reference_id") == case["case_id"]
+                and record.get("status") == "COMPLETED"
+                and bool(record.get("id"))
+                and amount_matches
+                and paid.get("currency_code") == case["currency"]
+            )
+    return {"verified": valid, "environment": "sandbox",
+            "order_id": case["order_id"],
+            "capture_id": record.get("id") if valid else None,
+            "paid": record.get("amount", {}) if valid else {},
+            "status": "COMPLETED" if valid else "UNVERIFIED"}
+
+
+def _approved_order_matches(order, case):
+    """PayPal is authoritative: do not trust local state or buyer redirect alone."""
+    units = order.get("purchase_units") or []
+    if order.get("id") != case["order_id"] or order.get("intent") != "CAPTURE":
+        return False
+    if len(units) != 1 or units[0].get("reference_id") != case["case_id"]:
+        return False
+    amount = units[0].get("amount") or {}
+    try:
+        matching_total = normalize(amount.get("value")) == case["amount"]
+    except ValueError:
+        return False
+    return matching_total and amount.get("currency_code") == case["currency"]
+
 
 @app.post("/api/capture/{case_id}")
 async def capture(case_id: str):
@@ -108,26 +160,32 @@ async def capture(case_id: str):
     case = cases.get(case_id)
     if not case or not case["approved"] or not case["order_id"] or case["injected"]:
         raise HTTPException(409, "No authorized sandbox order")
-    if case["capture"]:
+    if case["currency"] != "USD":
+        raise HTTPException(422, "This demo supports USD sandbox payments only")
+    if case["capture"] and case["capture"]["verified"]:
         return case["capture"]
     try:
-        result = await capture_order(case["order_id"], case_id)
+        remote = await get_order(case["order_id"])
     except SandboxError as exc:
         raise HTTPException(502, str(exc))
-    units = result.get("purchase_units", [])
-    if len(units) != 1:
-        valid, record = False, {}
-    else:
-        records = units[0].get("payments",{}).get("captures",[])
-        record = records[0] if len(records) == 1 else {}
-        value = record.get("amount", {})
-        valid = (result.get("id") == case["order_id"] and result.get("status") == "COMPLETED"
-          and record.get("status") == "COMPLETED" and value.get("value") == case["amount"]
-          and value.get("currency_code") == case["currency"]
-          and units[0].get("reference_id") == case_id)
-    case["capture"] = {"verified":valid, "order_id":case["order_id"],
-                       "capture_id":record.get("id"), "paid":record.get("amount",{})}
-    return case["capture"]
+    if not _approved_order_matches(remote, case):
+        raise HTTPException(409, "Remote PayPal order does not match verified intent")
+    if remote.get("status") == "COMPLETED":
+        receipt = _verified_capture(remote, case)
+        if not receipt["verified"]:
+            raise HTTPException(409, "Remote completed order has a mismatched capture")
+        case["capture"] = receipt
+        return receipt
+    if remote.get("status") != "APPROVED":
+        raise HTTPException(409, "Buyer has not approved this exact PayPal sandbox order")
+    try:
+        captured = await capture_order(case["order_id"], case_id)
+    except SandboxError as exc:
+        raise HTTPException(502, str(exc))
+    receipt = _verified_capture(captured, case)
+    if receipt["verified"]:
+        case["capture"] = receipt
+    return receipt
 
 TESTS = [
     ("Invoice Priya for $75, not $750.", "75.00", "USD"),
