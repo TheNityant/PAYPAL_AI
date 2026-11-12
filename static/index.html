@@ -34,6 +34,7 @@ pre{background:#091328;padding:14px;border-radius:9px;white-space:pre-wrap;overf
 <button id="checkout" disabled>Create PayPal Sandbox order</button>
 <a id="buyerApproval" href="#" target="_blank" rel="noopener noreferrer" style="display:none;color:#b5caff">Approve with PayPal Sandbox buyer</a>
 <button id="capture" disabled>Verify completed sandbox capture</button>
+<p class="muted">Only USD test transactions are supported by this checkout demo. INR instructions may still be evaluated without sending a payment.</p>
 <p class="muted" id="checkoutInfo">Sandbox checkout is disabled by default; local credentials and explicit enablement required.</p>
 <pre id="transaction">No payment action taken.</pre></section>
 <section><h2>02 / Controlled Evaluation Lab</h2>
@@ -56,7 +57,7 @@ el('analyze').onclick=async()=>{el('status').textContent='Checking…';current=n
 try{const a=await api('/api/analyze',{instruction:el('instruction').value,
 injected_amount:el('override').value||null,injected_currency:el('overrideCurrency').value||null});
 current=a;el('analysis').textContent=JSON.stringify(a,null,2);el('status').textContent=a.status==='PASS'?'PASS — exact intent':'HOLD — review required';
-el('status').className=a.status==='PASS'?'good':'bad';el('approve').disabled=a.status!=='PASS'||a.injected;
+el('status').className=a.status==='PASS'?'good':'bad';el('approve').disabled=a.status!=='PASS'||a.injected||!a.checkout_eligible; if(a.status==='PASS'&&!a.checkout_eligible)el('status').textContent='VERIFIED — payment demo USD only';
 }catch(e){el('status').textContent=e.message}};
 el('approve').onclick=async()=>{if(!current)return;try{
 await api('/api/approve',{case_id:current.case_id,confirmed:el('confirmed').checked,
